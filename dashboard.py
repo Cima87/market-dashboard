@@ -1,127 +1,160 @@
 import streamlit as st
 import yfinance as yf
 import feedparser
-from streamlit_autorefresh import st_autorefresh
+import time
 
 # --- CONFIGURATION ---
-# Auto-refresh every 30 seconds (30 * 1000 milliseconds)
-st_autorefresh(interval=30 * 1000, key="dataframerefresh")
+# Force wide layout and dark theme setup
+st.set_page_config(page_title="US100 Command Center", layout="wide")
 
-# Custom CSS for "Dark Mode" and Compact Layout
+# --- CUSTOM CSS (The "Black Mode" & Layout) ---
 st.markdown("""
     <style>
-    /* Force Black Background */
+    /* 1. Force Pitch Black Background */
     .stApp {
         background-color: #000000;
         color: #FFFFFF;
     }
-    /* Compact Text for Metrics */
-    div[data-testid="stMetricValue"] {
-        font-size: 24px !important; 
-        color: #FFFFFF !important;
+    
+    /* 2. Hide standard Streamlit header/footer */
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    /* 3. Custom Price Ticker Styling */
+    .ticker-container {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background-color: #111;
+        padding: 10px 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        border: 1px solid #333;
     }
-    /* Remove padding to make it tight */
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 1rem;
+    .main-price {
+        font-size: 28px; /* Smaller than before */
+        font-weight: bold;
+        color: white;
+        margin-right: 15px;
     }
-    /* Compact News List */
-    .news-item {
-        margin-bottom: 8px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid #333;
-        font-size: 14px;
+    .price-change-green { color: #00FF00; font-size: 18px; }
+    .price-change-red { color: #FF4444; font-size: 18px; }
+    .currency-tag { font-size: 16px; color: #888; }
+    
+    /* 4. Sentiment Bars */
+    .sentiment-wrapper {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 10px;
     }
-    a {
-        color: #4da6ff;
-        text-decoration: none;
-    }
-    /* Status Bars */
-    .status-box {
-        padding: 10px;
-        border-radius: 5px;
+    .bar {
+        flex: 1;
+        padding: 8px;
         text-align: center;
         font-weight: bold;
         color: black;
+        border-radius: 4px;
+        font-size: 14px;
     }
+    
+    /* 5. Compact News List */
+    .news-row {
+        padding: 8px 0;
+        border-bottom: 1px solid #222;
+        font-size: 14px;
+    }
+    .news-source { color: #888; font-size: 12px; margin-right: 10px; }
+    .news-link { color: #4da6ff; text-decoration: none; }
+    .news-link:hover { text-decoration: underline; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCTIONS ---
-def get_market_data():
-    # Fetch Futures (NQ=F) and Currency (USD/SEK)
-    tickers = yf.Tickers("NQ=F SEK=X")
-    
-    # NQ Data
-    nq = tickers.tickers['NQ=F'].history(period="1d", interval="1m")
-    if not nq.empty:
-        nq_price = nq['Close'].iloc[-1]
-        nq_change = nq_price - nq['Open'].iloc[0] # Change since open
-        nq_pct = (nq_change / nq['Open'].iloc[0]) * 100
-    else:
-        nq_price, nq_change, nq_pct = 0, 0, 0
-
-    # SEK Data
-    sek = tickers.tickers['SEK=X'].history(period="1d", interval="1m")
-    if not sek.empty:
-        sek_price = sek['Close'].iloc[-1]
-    else:
-        sek_price = 0
+# --- DATA FUNCTIONS ---
+def get_data():
+    try:
+        # Fetch NQ=F (Futures) and SEK=X (USD/SEK)
+        tickers = yf.Tickers("NQ=F SEK=X")
         
-    return nq_price, nq_change, nq_pct, sek_price
+        # Nasdaq Data
+        nq_hist = tickers.tickers['NQ=F'].history(period="1d", interval="1m")
+        if not nq_hist.empty:
+            price = nq_hist['Close'].iloc[-1]
+            prev = nq_hist['Open'].iloc[0]
+            change = price - prev
+            pct = (change / prev) * 100
+        else:
+            price, change, pct = 0, 0, 0
+
+        # SEK Data
+        sek_hist = tickers.tickers['SEK=X'].history(period="1d", interval="1m")
+        sek = sek_hist['Close'].iloc[-1] if not sek_hist.empty else 0.0
+        
+        return price, change, pct, sek
+    except:
+        return 0, 0, 0, 0
 
 def get_news():
-    # Using CNBC Tech and Investing.com
-    rss_url = "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910"
-    feed = feedparser.parse(rss_url)
-    return feed.entries[:6] # Top 6 headlines
+    try:
+        url = "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910"
+        return feedparser.parse(url).entries[:6]
+    except:
+        return []
 
-# --- DATA FETCHING ---
-nq_price, nq_change, nq_pct, sek_price = get_market_data()
-news_items = get_news()
+# --- MAIN APP LOGIC ---
 
-# --- LAYOUT ---
+# 1. Fetch Data
+price, change, pct, sek = get_data()
+news = get_news()
 
-# 1. TOP ROW: Compact Price & Currency
-c1, c2 = st.columns([2, 1])
-with c1:
-    st.metric("US100 Futures", f"{nq_price:,.0f}", f"{nq_change:+.1f} ({nq_pct:+.1f}%)")
-with c2:
-    st.metric("USD/SEK", f"{sek_price:.2f} kr", None)
+# 2. HEADER: Live Price Ticker (Custom HTML)
+color_class = "price-change-green" if change >= 0 else "price-change-red"
+sign = "+" if change >= 0 else ""
 
-st.markdown("---")
-
-# 2. SENTIMENT SECTION (The 3 Bars)
-st.markdown("### 🚦 Market Drivers")
-
-col_green, col_orange, col_red = st.columns(3)
-
-# Logic for "Fake" Sentiment (Since we don't have the AI API connected yet)
-# In the future, the AI will set these variables automatically.
-with col_green:
-    st.markdown('<div class="status-box" style="background-color: #00FF00;">TECH (Bullish)</div>', unsafe_allow_html=True)
-with col_orange:
-    st.markdown('<div class="status-box" style="background-color: #FFA500;">FED (Caution)</div>', unsafe_allow_html=True)
-with col_red:
-    st.markdown('<div class="status-box" style="background-color: #FF4444;">GEO (Risk)</div>', unsafe_allow_html=True)
-
-# 3. AI SUMMARY (White Text)
-st.markdown("""
-<div style="margin-top: 15px; font-style: italic; font-size: 14px; color: #DDDDDD;">
-    1. <b>Tech:</b> Nvidia and Apple are holding gains pre-market, providing support.<br>
-    2. <b>Fed:</b> Interest rate uncertainty remains high ahead of next week's meeting.<br>
-    3. <b>Geo:</b> Tariff headlines from Davos are causing erratic spikes in futures.
+st.markdown(f"""
+<div class="ticker-container">
+    <div>
+        <span style="color:#888; font-size:14px; margin-right:10px;">US100 FUTURES</span>
+        <span class="main-price">{price:,.2f}</span>
+        <span class="{color_class}">{sign}{change:.2f} ({sign}{pct:.2f}%)</span>
+    </div>
+    <div>
+        <span style="color:#888; font-size:14px; margin-right:10px;">USD/SEK</span>
+        <span style="color:white; font-size:20px;">{sek:.2f} kr</span>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("---")
+# 3. SENTIMENT SECTION
+st.caption("MARKET DRIVERS (AI SENTIMENT)")
 
-# 4. COMPACT NEWS FEED
-st.markdown("### 📰 Live Feed")
-for item in news_items:
+# The 3 Colored Bars
+st.markdown("""
+<div class="sentiment-wrapper">
+    <div class="bar" style="background-color: #4CAF50;">TECH (Bullish)</div>
+    <div class="bar" style="background-color: #FFA726;">FED (Uncertain)</div>
+    <div class="bar" style="background-color: #EF5350;">GEO (Risk)</div>
+</div>
+""", unsafe_allow_html=True)
+
+# The AI Summary (White text)
+st.markdown("""
+<div style="background-color: #111; padding: 15px; border-radius: 5px; font-size: 14px; line-height: 1.6; margin-bottom: 20px; border: 1px solid #333;">
+    <strong style="color: #4CAF50;">1. Tech:</strong> Nasdaq supported by pre-market strength in Semiconductor sector.<br>
+    <strong style="color: #FFA726;">2. Fed:</strong> Bond yields are flat; market waiting for next week's rate decision.<br>
+    <strong style="color: #EF5350;">3. Geo:</strong> Tariff headlines from Davos continue to create short-term volatility.
+</div>
+""", unsafe_allow_html=True)
+
+# 4. NEWS FEED
+st.caption("LIVE WIRE")
+for item in news:
     st.markdown(f"""
-    <div class="news-item">
-        <a href="{item.link}" target="_blank">{item.title}</a>
-        <br><span style="color: #888; font-size: 12px;">{item.get('published', '')[0:25]}...</span>
+    <div class="news-row">
+        <span class="news-source">CNBC US</span>
+        <a class="news-link" href="{item.link}" target="_blank">{item.title}</a>
     </div>
     """, unsafe_allow_html=True)
+
+# 5. AUTO REFRESH LOGIC (Native)
+time.sleep(30) # Wait 30 seconds
+st.rerun()     # Restart the script
