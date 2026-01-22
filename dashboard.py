@@ -1,71 +1,127 @@
 import streamlit as st
 import yfinance as yf
 import feedparser
-import pandas as pd
+from streamlit_autorefresh import st_autorefresh
 
 # --- CONFIGURATION ---
-TICKER = "NQ=F"  # Nasdaq 100 Futures (Trades 23h/day)
-RSS_FEEDS = {
-    "CNBC Tech": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910",
-    "Investing.com": "https://www.investing.com/rss/news_25.rss", # General market news
-}
+# Auto-refresh every 30 seconds (30 * 1000 milliseconds)
+st_autorefresh(interval=30 * 1000, key="dataframerefresh")
 
-# --- 1. GET LIVE PRICE ---
-def get_price():
-    data = yf.Ticker(TICKER)
-    # Get the latest 1-minute candle
-    df = data.history(period="1d", interval="1m")
-    if not df.empty:
-        current_price = df['Close'].iloc[-1]
-        # Calculate change from yesterday's close
-        prev_close = data.info.get('previousClose', current_price)
-        change = current_price - prev_close
-        pct_change = (change / prev_close) * 100
-        return current_price, change, pct_change
-    return 0, 0, 0
+# Custom CSS for "Dark Mode" and Compact Layout
+st.markdown("""
+    <style>
+    /* Force Black Background */
+    .stApp {
+        background-color: #000000;
+        color: #FFFFFF;
+    }
+    /* Compact Text for Metrics */
+    div[data-testid="stMetricValue"] {
+        font-size: 24px !important; 
+        color: #FFFFFF !important;
+    }
+    /* Remove padding to make it tight */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 1rem;
+    }
+    /* Compact News List */
+    .news-item {
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #333;
+        font-size: 14px;
+    }
+    a {
+        color: #4da6ff;
+        text-decoration: none;
+    }
+    /* Status Bars */
+    .status-box {
+        padding: 10px;
+        border-radius: 5px;
+        text-align: center;
+        font-weight: bold;
+        color: black;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- 2. GET NEWS HEADLINES ---
+# --- FUNCTIONS ---
+def get_market_data():
+    # Fetch Futures (NQ=F) and Currency (USD/SEK)
+    tickers = yf.Tickers("NQ=F SEK=X")
+    
+    # NQ Data
+    nq = tickers.tickers['NQ=F'].history(period="1d", interval="1m")
+    if not nq.empty:
+        nq_price = nq['Close'].iloc[-1]
+        nq_change = nq_price - nq['Open'].iloc[0] # Change since open
+        nq_pct = (nq_change / nq['Open'].iloc[0]) * 100
+    else:
+        nq_price, nq_change, nq_pct = 0, 0, 0
+
+    # SEK Data
+    sek = tickers.tickers['SEK=X'].history(period="1d", interval="1m")
+    if not sek.empty:
+        sek_price = sek['Close'].iloc[-1]
+    else:
+        sek_price = 0
+        
+    return nq_price, nq_change, nq_pct, sek_price
+
 def get_news():
-    news_items = []
-    for source, url in RSS_FEEDS.items():
-        feed = feedparser.parse(url)
-        for entry in feed.entries[:5]: # Top 5 per source
-            news_items.append({
-                "Title": entry.title,
-                "Link": entry.link,
-                "Source": source,
-                "Published": entry.get('published', 'N/A')
-            })
-    return news_items
+    # Using CNBC Tech and Investing.com
+    rss_url = "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910"
+    feed = feedparser.parse(rss_url)
+    return feed.entries[:6] # Top 6 headlines
 
-# --- 3. THE DASHBOARD UI ---
-st.set_page_config(page_title="US100 Command Center", layout="centered")
+# --- DATA FETCHING ---
+nq_price, nq_change, nq_pct, sek_price = get_market_data()
+news_items = get_news()
 
-# A. Header & Price
-st.title("🦅 US100 Command Center")
+# --- LAYOUT ---
 
-if st.button('🔄 Refresh Data'):
-    st.rerun()
+# 1. TOP ROW: Compact Price & Currency
+c1, c2 = st.columns([2, 1])
+with c1:
+    st.metric("US100 Futures", f"{nq_price:,.0f}", f"{nq_change:+.1f} ({nq_pct:+.1f}%)")
+with c2:
+    st.metric("USD/SEK", f"{sek_price:.2f} kr", None)
 
-price, change, pct = get_price()
+st.markdown("---")
 
-# The "Big Number" Display
-st.metric(
-    label="Nasdaq 100 Futures (NQ=F)",
-    value=f"{price:,.2f}",
-    delta=f"{change:+.2f} ({pct:+.2f}%)"
-)
+# 2. SENTIMENT SECTION (The 3 Bars)
+st.markdown("### 🚦 Market Drivers")
 
-st.divider()
+col_green, col_orange, col_red = st.columns(3)
 
-# B. News Analysis (Placeholder for AI)
-st.subheader("🤖 Sentiment Analysis")
-st.info("AI STATUS: CALM. No major 3-star events detected in the last hour.")
+# Logic for "Fake" Sentiment (Since we don't have the AI API connected yet)
+# In the future, the AI will set these variables automatically.
+with col_green:
+    st.markdown('<div class="status-box" style="background-color: #00FF00;">TECH (Bullish)</div>', unsafe_allow_html=True)
+with col_orange:
+    st.markdown('<div class="status-box" style="background-color: #FFA500;">FED (Caution)</div>', unsafe_allow_html=True)
+with col_red:
+    st.markdown('<div class="status-box" style="background-color: #FF4444;">GEO (Risk)</div>', unsafe_allow_html=True)
 
-# C. Raw Feed
-st.subheader("📰 Live Wire")
-news = get_news()
-for item in news:
-    st.markdown(f"**{item['Source']}**: [{item['Title']}]({item['Link']})")
-    st.caption(f"Time: {item['Published']}")
-    st.markdown("---")
+# 3. AI SUMMARY (White Text)
+st.markdown("""
+<div style="margin-top: 15px; font-style: italic; font-size: 14px; color: #DDDDDD;">
+    1. <b>Tech:</b> Nvidia and Apple are holding gains pre-market, providing support.<br>
+    2. <b>Fed:</b> Interest rate uncertainty remains high ahead of next week's meeting.<br>
+    3. <b>Geo:</b> Tariff headlines from Davos are causing erratic spikes in futures.
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("---")
+
+# 4. COMPACT NEWS FEED
+st.markdown("### 📰 Live Feed")
+for item in news_items:
+    st.markdown(f"""
+    <div class="news-item">
+        <a href="{item.link}" target="_blank">{item.title}</a>
+        <br><span style="color: #888; font-size: 12px;">{item.get('published', '')[0:25]}...</span>
+    </div>
+    """, unsafe_allow_html=True)
